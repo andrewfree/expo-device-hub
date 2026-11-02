@@ -5,6 +5,7 @@
 **Systems:** HubClient, HubComponents, Hub
 **Author:** Claude Code (Claude Opus 5.5), directed by Krystof Woldrich
 **Date:** 2026-10-21
+**Revised:** 2026-11-02 (the native hinge observation wins over the last command)
 **Related:** LLP 0000, LLP 0004, LLP 0013
 
 ## Summary
@@ -88,7 +89,7 @@ serve-sim's screen config also carries the hinge state and the display ID. The i
 | `capabilities.fold`               | Set when `supportsHingeAngle` is true, or when it is absent and `hingeAngle` is reported                                                                                |
 | `.angle` / `.poses`               | `{ 0, 180 }` / all five, at Device Hub's angles                                                                                                                         |
 | `.tableMode` / `.faceDown`        | `true` / `supportsPhysicalOrientation`                                                                                                                                  |
-| `fold.angle` / `fold.pose`        | `hingeAngle` / `hingePose`, with the pending request                                                                                                                    |
+| `fold.angle` / `fold.pose`        | `hingeAngle` / `hingePose`, with the pending request; see [Native observation](#native-observation)                                                                     |
 | `fold.tableMode`                  | `{ enabled: tableMode, available: tableModeAvailable }`                                                                                                                 |
 | `fold.physical`                   | `{ pose: physicalPose, faceDown }`: face down with Table Mode; undefined while `tableMode` or `physicalOrientation` is unknown and the other field does not rule it out |
 | `screen.display`, `displays[].id` | `screenId` 1 → `cover`, 3 → `inner`                                                                                                                                     |
@@ -98,6 +99,12 @@ serve-sim's screen config also carries the hinge state and the display ID. The i
 [observed: `useIosDevice.ts`, `hinge-control.ts`, `screen-config.ts`]
 
 While `physical.faceDown` is undefined, a half-open iPhone Duo keeps the panel that native readback reports as the active display. The 3D model keeps its face-down framing in that state, so the presented panel and the framing agree. Commands still elect the display from their own state [observed: `duoIntendedScreen` in `duo/duo-fold.ts`].
+
+#### Native observation
+
+`hingeAngle`, `hingePose`, `tableMode`, and `physicalOrientation` are the state of the last successful command. serve-sim also sends `observedDeviceState`, the hinge angle, physical orientation, and Table Mode that it reads from the simulator [observed: `screenConfig` in serve-sim's `src/device-session.ts`]. When the config has it, the observation replaces the command fields in every row above, as in serve-sim's own client: `fold.pose` is the preset that the observation matches, else `null`, `tableMode.available` follows the observed angle and orientation, and a field that the observation omits is unknown [observed: `observedScreenConfig` in `screen-config.ts`; `previewScreenConfig` in serve-sim's `src/client/simulator/screen-config-state.ts`]. A fold made with the Simulator's own controls changes only the observation, so without this `fold` would not show it: the helper sets the command fields from its own commands and from a native read when it seeds or refreshes the hinge, and a new observation sets only `observedDeviceState` [observed: the `0x10` handler, `hydrateHingeState`, and the device-state listener in serve-sim's `src/device-session.ts`]. A config that changes only the observation is a new config [observed: `screenConfigsEqual` in `screen-config.ts`].
+
+The helper sends the command's config before its native readback moves. A command's preview therefore holds until the observation reaches it, or for 500 ms after the command's config matched, as serve-sim's client holds it. The `confirmed` event comes when the preview ends [observed: `isHingePreviewObserved` in `hinge-control.ts` and `useIosDevice.ts`; `use-duo-framing.ts` in serve-sim's `src/client/hooks`].
 
 ### Android emulators
 
@@ -127,7 +134,7 @@ These are Claude Code's choices while it implemented the direction above. Human 
 - **`fold`, not `hinge`.** The object holds more than the hinge: the pose, Table Mode, and how the device is held. The angle is one field. The name also matches serve-emu's `/api/fold` and the Hub's Fold settings [observed: `src/shared/api-contracts.ts` in serve-emu; `FoldSettings.tsx`].
 - **Opt-in capabilities.** #352 proposed `DeviceHinge.controls`, where `undefined` meant every iPhone Duo control. An explicit `capabilities.fold` follows the other capability groups, and a new backend offers nothing by default.
 - **Commands named after their capability.** `tableMode` and `faceDown` replace serve-sim's wire names `table` and `physical`, so one name is used for the capability, the command, and the state group.
-- **Helpers removed from the public API.** `HINGE_POSES` (with Device Hub's angles and labels), `hingeControlState`, `isHingeControlCommand`, `isTableModeAvailable`, `HingeControlState`, and `HingePhysicalOrientation` described serve-sim's protocol. The iOS adapter keeps what it uses; `isHingeControlCommand` and `isTableModeAvailable` had no caller in hub-client and were removed [observed: `git grep` on #432's head 5721b06f].
+- **Helpers removed from the public API.** `HINGE_POSES` (with Device Hub's angles and labels), `hingeControlState`, `isHingeControlCommand`, `isTableModeAvailable`, `HingeControlState`, and `HingePhysicalOrientation` described serve-sim's protocol. The iOS adapter keeps what it uses; `isHingeControlCommand` and `isTableModeAvailable` had no caller in hub-client and were removed [observed: `git grep` on #432's head 5721b06f]. A private `isTableModeAvailable` came back for the [native observation](#native-observation).
 - **The 3D model keeps the iPhone Duo's name.** `FoldableDeviceScreen` and the `duo-*` modules in `@expo/hub-components/foldable` render only Xcode's iPhone Duo model.
 
 ## Open questions

@@ -68,6 +68,7 @@ import {
   type HingeControlState,
   hingeControlState,
   hingeWireCommand,
+  isHingePreviewObserved,
 } from "./hinge-control";
 import { appendActivitySample, parseActivityHostCores, parseActivitySample } from "./activity";
 import { useActivityStatus } from "./useActivityStatus";
@@ -83,6 +84,7 @@ import {
 } from "./orientation";
 import {
   type SimScreenConfig,
+  observedScreenConfig,
   screenConfigsEqual,
   screenSizesEqual,
   simScreenSize,
@@ -744,19 +746,24 @@ export function useIosDeviceClient(options: DeviceConnectionOptions): DeviceClie
     };
   }, []);
   const [streamStatsEnabled, setStreamStatsEnabled] = useState(false);
-  const previewHingeAngle = hingePreview?.hingeAngle ?? viewScreen?.hingeAngle;
-  const previewHingePose = hingePreview ? hingePreview.hingePose : viewScreen?.hingePose;
+  // @ref LLP 0016#native-observation — the native observation wins over the last command, so a fold made in the Simulator shows
+  const hingeScreen = useMemo(
+    () => (viewScreen ? observedScreenConfig(viewScreen) : null),
+    [viewScreen],
+  );
+  const previewHingeAngle = hingePreview?.hingeAngle ?? hingeScreen?.hingeAngle;
+  const previewHingePose = hingePreview ? hingePreview.hingePose : hingeScreen?.hingePose;
   // A pending angle or preset releases Table Mode, so the preview wins over a
   // face-down orientation that another client confirmed.
-  const previewTableMode = hingePreview?.tableMode ?? viewScreen?.tableMode;
+  const previewTableMode = hingePreview?.tableMode ?? hingeScreen?.tableMode;
   const previewFaceDown =
-    previewTableMode === true && viewScreen?.physicalOrientation === "facedown";
+    previewTableMode === true && hingeScreen?.physicalOrientation === "facedown";
   // @ref LLP 0016#fold-state-and-commands — an unknown field leaves face down unknown, as serve-sim's framing reads it
   const knownFaceDown =
     previewFaceDown ||
     previewTableMode === false ||
-    (viewScreen?.physicalOrientation !== undefined &&
-      viewScreen.physicalOrientation !== "facedown");
+    (hingeScreen?.physicalOrientation !== undefined &&
+      hingeScreen.physicalOrientation !== "facedown");
   const electedPose = physicalPose === undefined ? previewHingePose : physicalPose;
   const activeScreenId = duoIntendedScreen(
     previewHingeAngle,
@@ -1183,7 +1190,8 @@ export function useIosDeviceClient(options: DeviceConnectionOptions): DeviceClie
     (input: FoldControlCommand) => {
       // Its own object per request, so a listener can follow each one to its reply.
       const command = { ...input };
-      const { screen } = duoRef.current;
+      const { screen: config } = duoRef.current;
+      const screen = config && observedScreenConfig(config);
       setHingeError(null);
       // Editing the hinge or Table Mode clears the named preset, but preserves
       // the simulator's physical orientation (for example Laptop on a table).
@@ -2145,15 +2153,30 @@ export function useIosDeviceClient(options: DeviceConnectionOptions): DeviceClie
     // Configs from earlier commands can arrive while the latest request is
     // queued. Hold the requested pose until both its acknowledgement and its
     // matching config arrive, so rapid preset changes never animate backwards.
-    if (
+    const commanded =
       (hingePreview.hingeAngle === undefined || hingePreview.hingeAngle === screen.hingeAngle) &&
       (hingePreview.hingePose === undefined || hingePreview.hingePose === screen.hingePose) &&
-      (hingePreview.tableMode === undefined || hingePreview.tableMode === screen.tableMode)
-    ) {
+      (hingePreview.tableMode === undefined || hingePreview.tableMode === screen.tableMode);
+    // The observation, which the fold shows, can lag the command. As serve-sim's
+    // client does, hold the preview until it arrives, for at most 500 ms.
+    const observed =
+      screen.observedDeviceState === undefined
+        ? commanded
+        : isHingePreviewObserved(hingePreview, observedScreenConfig(screen));
+    if (!commanded && !observed) return;
+    const confirm = () => {
       setHingePreview(null);
       emitHingeEvent({ type: "confirmed" });
+    };
+    if (observed) {
+      confirm();
+      return;
     }
+    const timer = setTimeout(confirm, 500);
+    return () => clearTimeout(timer);
   }, [hingePreview, hingePending, screen, emitHingeEvent]);
+
+  const observedScreen = useMemo(() => (screen ? observedScreenConfig(screen) : null), [screen]);
 
   useEffect(() => {
     // Also learn poses applied outside this browser. An older queued reply
@@ -2161,10 +2184,10 @@ export function useIosDeviceClient(options: DeviceConnectionOptions): DeviceClie
     // Rotate clears the known native physical pose. Ignore an older
     // preset acknowledgement until native reports that its pose was cleared.
     if (orientationOverride || hingePreview || hingePending) return;
-    if (screen?.hingePose) {
-      setPhysicalPose(screen.hingePose);
-      sentHingePoseRef.current = screen.hingePose;
-    } else if (duoPhysicalPoseChanged(physicalPose, screen?.physicalOrientation)) {
+    if (observedScreen?.hingePose) {
+      setPhysicalPose(observedScreen.hingePose);
+      sentHingePoseRef.current = observedScreen.hingePose;
+    } else if (duoPhysicalPoseChanged(physicalPose, observedScreen?.physicalOrientation)) {
       // Another client turned the device over without a preset.
       setPhysicalPose(null);
       sentHingePoseRef.current = null;
@@ -2173,8 +2196,8 @@ export function useIosDeviceClient(options: DeviceConnectionOptions): DeviceClie
     orientationOverride,
     hingePreview,
     hingePending,
-    screen?.hingePose,
-    screen?.physicalOrientation,
+    observedScreen?.hingePose,
+    observedScreen?.physicalOrientation,
     physicalPose,
   ]);
 
@@ -2294,8 +2317,8 @@ export function useIosDeviceClient(options: DeviceConnectionOptions): DeviceClie
     return {
       ...state,
       tableMode: {
-        enabled: hingePreview?.tableMode ?? viewScreen?.tableMode,
-        available: viewScreen?.tableModeAvailable,
+        enabled: hingePreview?.tableMode ?? hingeScreen?.tableMode,
+        available: hingeScreen?.tableModeAvailable,
       },
       physical: { pose: physicalPose, faceDown: knownFaceDown ? previewFaceDown : undefined },
     };
@@ -2306,8 +2329,8 @@ export function useIosDeviceClient(options: DeviceConnectionOptions): DeviceClie
     previewHingePose,
     previewHingeAngle,
     hingePreview?.tableMode,
-    viewScreen?.tableMode,
-    viewScreen?.tableModeAvailable,
+    hingeScreen?.tableMode,
+    hingeScreen?.tableModeAvailable,
     previewFaceDown,
     knownFaceDown,
     hingePending,

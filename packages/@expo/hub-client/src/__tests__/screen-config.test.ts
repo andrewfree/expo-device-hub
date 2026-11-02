@@ -1,6 +1,11 @@
 import { describe, expect, test } from "bun:test";
 
-import { screenConfigsEqual, screenSizesEqual, simScreenSize } from "../screen-config";
+import {
+  observedScreenConfig,
+  screenConfigsEqual,
+  screenSizesEqual,
+  simScreenSize,
+} from "../screen-config";
 
 describe("screenConfigsEqual", () => {
   const inner = { width: 2007, height: 2853, orientation: "portrait" as const, screenId: 3 };
@@ -32,6 +37,65 @@ describe("screenConfigsEqual", () => {
     expect(screenConfigsEqual(inner, { ...inner, supportsPhysicalOrientation: true })).toBe(false);
     expect(screenConfigsEqual(inner, { ...inner, physicalOrientation: "facedown" })).toBe(false);
     expect(screenConfigsEqual(inner, { ...inner, inputUnavailable: true })).toBe(false);
+  });
+
+  test("reports a change that only the native observation makes", () => {
+    const observed = { ...inner, observedDeviceState: { hingeAngle: 90 } };
+    expect(screenConfigsEqual(inner, observed)).toBe(false);
+    expect(
+      screenConfigsEqual(observed, { ...observed, observedDeviceState: { hingeAngle: 90 } }),
+    ).toBe(true);
+    expect(
+      screenConfigsEqual(observed, { ...inner, observedDeviceState: { hingeAngle: 120 } }),
+    ).toBe(false);
+    expect(
+      screenConfigsEqual(observed, {
+        ...inner,
+        observedDeviceState: { hingeAngle: 90, physicalOrientation: "facedown" },
+      }),
+    ).toBe(false);
+    expect(
+      screenConfigsEqual(observed, {
+        ...inner,
+        observedDeviceState: { hingeAngle: 90, tableMode: true },
+      }),
+    ).toBe(false);
+  });
+});
+
+describe("observedScreenConfig", () => {
+  const open = {
+    width: 2007,
+    height: 2853,
+    screenId: 3,
+    hingeAngle: 180,
+    hingePose: "open" as const,
+    tableMode: false,
+    tableModeAvailable: true,
+  };
+
+  test("returns a config without an observation unchanged", () => {
+    expect(observedScreenConfig(open)).toBe(open);
+  });
+
+  test("lets the observation replace the command, and names the pose it matches", () => {
+    const tent = { hingeAngle: 80, physicalOrientation: "facedown" as const, tableMode: true };
+    expect(observedScreenConfig({ ...open, observedDeviceState: tent })).toMatchObject({
+      hingeAngle: 80,
+      hingePose: "tent",
+      physicalOrientation: "facedown",
+      tableMode: true,
+      tableModeAvailable: true,
+    });
+    // A field the native reader omits is unknown, not the command's value.
+    expect(observedScreenConfig({ ...open, observedDeviceState: { hingeAngle: 0 } })).toMatchObject(
+      {
+        hingeAngle: 0,
+        hingePose: undefined,
+        tableMode: undefined,
+        tableModeAvailable: undefined,
+      },
+    );
   });
 });
 

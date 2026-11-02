@@ -5,7 +5,7 @@
  * WebSocket (tag `0x10`, acknowledged with `0x90`). Nothing here is public.
  */
 
-import { type FoldControlCommand, type FoldPose } from "./fold";
+import { FOLD_POSES, type FoldControlCommand, type FoldPose } from "./fold";
 
 /** Xcode 27.1 Device Hub's hinge angle for each iPhone Duo pose. */
 export const DUO_POSE_ANGLES: Readonly<Record<FoldPose, number>> = {
@@ -65,4 +65,65 @@ export type HingePhysicalOrientation =
 
 export function hingePoseOrientation(pose: FoldPose): HingePhysicalOrientation {
   return pose === "laptop" ? "landscape-left" : pose === "tent" ? "facedown" : "portrait";
+}
+
+/** serve-sim's native hinge observation; a field that the native reader omits is unknown. */
+export type ObservedHingeState = {
+  hingeAngle?: number;
+  physicalOrientation?: HingePhysicalOrientation;
+  tableMode?: boolean;
+};
+
+/** The preset that observed native state describes, whichever client produced it. */
+export function observedHingePose(
+  angle: number | undefined,
+  orientation: HingePhysicalOrientation | undefined,
+  tableMode: boolean | undefined,
+): FoldPose | null | undefined {
+  if (angle === undefined || orientation === undefined || tableMode === undefined) return undefined;
+  return (
+    FOLD_POSES.find(
+      (pose) =>
+        Math.abs(DUO_POSE_ANGLES[pose] - angle) <= 0.5 &&
+        hingePoseOrientation(pose) === orientation &&
+        (pose === "tent") === tableMode,
+    ) ?? null
+  );
+}
+
+/** Native observations replace command state, including fields the native reader omits. */
+export function observedHingeState(state: ObservedHingeState) {
+  const { hingeAngle, physicalOrientation, tableMode } = state;
+  return {
+    hingeAngle,
+    physicalOrientation,
+    tableMode,
+    hingePose: observedHingePose(hingeAngle, physicalOrientation, tableMode),
+    tableModeAvailable:
+      hingeAngle === undefined || physicalOrientation === undefined
+        ? undefined
+        : isTableModeAvailable(hingeAngle, physicalOrientation),
+  };
+}
+
+/** Native observation has reached every field that a local preview sets. */
+export function isHingePreviewObserved(
+  preview: HingeControlState,
+  observed: HingeControlState & { physicalOrientation?: HingePhysicalOrientation },
+): boolean {
+  return (
+    (preview.hingeAngle === undefined ||
+      (observed.hingeAngle !== undefined &&
+        Math.abs(observed.hingeAngle - preview.hingeAngle) <= 1)) &&
+    (!preview.hingePose ||
+      observed.physicalOrientation === hingePoseOrientation(preview.hingePose)) &&
+    (preview.tableMode === undefined || observed.tableMode === preview.tableMode)
+  );
+}
+
+/** Device Hub gates Table Mode by hinge state and physical (not app) orientation. */
+function isTableModeAvailable(angle: number, orientation: HingePhysicalOrientation): boolean {
+  if (angle === 0) return orientation === "landscape-left" || orientation === "landscape-right";
+  if (angle === 180) return orientation === "portrait";
+  return orientation !== "faceup";
 }

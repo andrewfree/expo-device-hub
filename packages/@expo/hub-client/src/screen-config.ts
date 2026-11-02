@@ -8,7 +8,12 @@
  */
 
 import { duoDisplayId } from "./duo/duo-fold";
-import { type HingeControlState, type HingePhysicalOrientation } from "./hinge-control";
+import {
+  type HingeControlState,
+  type HingePhysicalOrientation,
+  type ObservedHingeState,
+  observedHingeState,
+} from "./hinge-control";
 import { type ScreenSize } from "./types";
 
 /** serve-sim's `StreamConfig`: the size, the active display, and an iPhone Duo's hinge state. */
@@ -21,6 +26,8 @@ export interface SimScreenConfig extends Omit<ScreenSize, "display">, HingeContr
   supportsPhysicalOrientation?: boolean;
   /** Last confirmed physical orientation, separate from the app's screen orientation. */
   physicalOrientation?: HingePhysicalOrientation;
+  /** Native hinge snapshot. It also reports a fold made with the Simulator's own controls. */
+  observedDeviceState?: ObservedHingeState;
 }
 
 export function screenConfigsEqual(a: SimScreenConfig | null, b: SimScreenConfig): boolean {
@@ -37,8 +44,22 @@ export function screenConfigsEqual(a: SimScreenConfig | null, b: SimScreenConfig
     a.physicalOrientation === b.physicalOrientation &&
     a.tableMode === b.tableMode &&
     a.tableModeAvailable === b.tableModeAvailable &&
-    a.inputUnavailable === b.inputUnavailable
+    a.inputUnavailable === b.inputUnavailable &&
+    (a.observedDeviceState === undefined) === (b.observedDeviceState === undefined) &&
+    a.observedDeviceState?.hingeAngle === b.observedDeviceState?.hingeAngle &&
+    a.observedDeviceState?.physicalOrientation === b.observedDeviceState?.physicalOrientation &&
+    a.observedDeviceState?.tableMode === b.observedDeviceState?.tableMode
   );
+}
+
+/**
+ * The hinge state that the config shows, as serve-sim's `previewScreenConfig`
+ * reads it: a native observation replaces the last command's fields. A config
+ * without one is returned unchanged.
+ */
+export function observedScreenConfig(config: SimScreenConfig): SimScreenConfig {
+  if (config.observedDeviceState === undefined) return config;
+  return { ...config, ...observedHingeState(config.observedDeviceState) };
 }
 
 /**
