@@ -58,11 +58,13 @@ export function androidOrientationBackend(
   kind: AndroidOrientationKind,
   fetchImpl: (input: string, init?: RequestInit) => Promise<Response>,
   url: string,
+  available?: () => boolean,
 ): DeviceOrientationBackend {
   return {
     // The URL names the server and the serial, not the token.
     device: url,
     orientations: kind === "poses" ? DEVICE_ORIENTATIONS : LEGACY_ORIENTATIONS,
+    available,
     set: (orientation) =>
       writeAndroidOrientation(
         fetchImpl,
